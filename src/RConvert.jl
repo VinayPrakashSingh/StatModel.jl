@@ -1,6 +1,4 @@
-addprocs(5)
 using DataStructures, DataArrays , DataFrames, StatsFuns, GLM , JuMP,NLopt, HDF5, JLD, Distributions, MixedModels, RCall, StatsBase, xCommon
-@everywhere using DataStructures, DataArrays , DataFrames, StatsFuns, GLM , JuMP,NLopt, HDF5, JLD, Distributions, MixedModels, RCall, StatsBase, xCommon
 
 function loadDF()
     #cd("/media/u01/analytics/scoring/Healthy/modeling5/")
@@ -270,7 +268,7 @@ cfg=lowercase(cfg)
 ######################################
 #------------MODEL OBJECTS-----------#  [:fea_or_dis_trps_shr_dpp_p1,:fea_or_dis_trps_shr_dpp_p2,:fea_or_dis_trps_shr_dpp_p3,:fea_or_dis_trps_shr_dpp_p4]
 ######################################
-@everywhere abstract MModel 
+abstract MModel 
 
 function xResiduals(g::DataFrames.DataFrameRegressionModel)
     resp = g.model.rr
@@ -519,9 +517,6 @@ end
 
 
 # =======================================================================================
-# =======================================================================================
-
-#using IRImodels
 
 dfd[mocc.logvar_colname]=log(Array(dfd[mocc.logvar]+1))
 dfd[mdolocc.logvar_colname]=log(Array(dfd[mdolocc.logvar]+1))
@@ -629,138 +624,5 @@ poolit!(dfd,factor_cols)
 featureSelection(dfd[(dfd[:iso].==false)&(dfd[:buyer_pos_p1].==1),:], mocc)
 featureSelection(dfd[(dfd[:iso].==false)&(dfd[:buyer_pos_p1].==1),:], mdolocc)
 featureSelection(dfd[(dfd[:iso].==false) ,:], mpen)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# --- clustering ---
-
-@everywhere function runRemotemodels(fname::String, raneff::Array{Symbol} ,m::MModel)
-    #fdfd = Feather.read(fname)
-    dfd = readtable(fname,header=true);
-    repool!(dfd,raneff)
-    runmodels(dfd, raneff ,m)
-end
-
-function genQues()
-    ques=OrderedDict()
-    ques[:occ]=RemoteChannel(1)
-    ques[:dolocc]=RemoteChannel(1)
-    ques[:pen]=RemoteChannel(1)
-    return ques
-end
-ques = genQues()
-
-
-
-# ------------------------------------
-
-
-@everywhere function runGlmm(dfd::DataFrame, raneff::Array{Symbol}, m::MModel)
-    function genFmula(y::Symbol, iv::Array{Symbol},ranef::Array{Symbol})  
-        vars=setdiff(iv,vcat([y],ranef))
-        eval(parse( string(y)*" ~ 1"* reduce(*, [ " + "*  string(c) for c in vars ] ) * reduce(*, [ " + "*  "(1 | "*string(c)*")" for c in ranef ] )  ) )
-    end
-    v_out = OrderedDict()
-    for r in cfg[:random_campaigns]
-        #f = xgenFmula(m.y_var,m.finalvars,cfg[:random_campaigns]) 
-        f = genFmula(m.y_var,m.finalvars,[r])
-        println(f)
-        if m.Buyer_Pos_P1_is1
-    #        #gmm1 = fit!(glmm(f, dfd[ (dfd[:iso].==false)&(dfd[:buyer_pos_p1].==1) ,convert(Array{Symbol},vcat(m.finalvars, [m.y_var, m.logvar],cfg[:random_campaigns]))] , m.dist  ,m.lnk)  ) 
-            #gmm1 = fit!(glmm(f, dfd[ (dfd[:buyer_pos_p1].==1) ,convert(Array{Symbol},vcat(m.finalvars, [m.y_var, m.logvar],raneff  ))] , m.dist  ,m.lnk)  ) 
-            dfd = dfd[ (dfd[:buyer_pos_p1].==1) ,convert(Array{Symbol},vcat(m.finalvars, [m.y_var, m.logvar],raneff  ))]
-        else
-    #        #gmm1 = fit!(glmm(f, dfd[ (dfd[:iso].==false) ,convert(Array{Symbol},vcat(m.finalvars, [m.y_var, m.logvar],cfg[:random_campaigns]))] , m.dist  ,m.lnk)  )
-            #gmm1 = fit!(glmm(f, dfd[convert(Array{Symbol},vcat(m.finalvars, [m.y_var, m.logvar],raneff ))] , m.dist  ,m.lnk)  )
-            dfd = dfd[convert(Array{Symbol},vcat(m.finalvars, [m.y_var, m.logvar],raneff  ))]
-        end  
-        println("O.K. running glmm!! : ",names(dfd))
-        gmm1 = fit!(glmm(f, dfd , m.dist  ,m.lnk)  )
-    #    v_out[r] = gmm1
-    end
-    return v_out
-end
-
-#runGlmm(dfd, mocc)
-
-@everywhere function runmodels(fname::String, raneff::Array{Symbol} ,m::MModel,ques::OrderedDict)
-    fdfd = Feather.read("dfd.feather")
-    #poolit!(fdfd,raneff)
-    println("start glmm on : ",myid())
-    gout = runGlmm(fdfd, raneff, m)        
-    put!(ques[Symbol(m.modelName)],gout)
-    println("ending runGLMM!!!")
-end
-
-# --- Create Feather Files ----
-#using Feather, CategoricalArrays
-#@everywhere using Feather, CategoricalArrays
-for c in cfg[:random_campaigns]
-    dfd[c] = Array(dfd[c])
-    #dfd[c] = categorical(dfd[c])
-    factor_cols
-end
-cols = vcat(mocc.finalvars,mdolocc.finalvars, [:buyer_pos_p1, mdolocc.y_var, mdolocc.logvar, mocc.y_var, mocc.logvar],cfg[:random_campaigns])
-cols = vcat(cols,mpen.finalvars,[mpen.y_var, mpen.logvar])
-Feather.write("dfd.feather", dfd[ (dfd[:iso].==false) ,cols])
-# --- END Feather Files ----
-
-#test
-take!(ques[:dolocc]); runmodels( "/mnt/resource/analytics/CDW5_792/dfd.feather", cfg[:random_campaigns] ,mdolocc,ques)
-
-
-@async @spawnat 2 runmodels( "/mnt/resource/analytics/CDW5_792/dfd.feather", cfg[:random_campaigns] ,mdolocc,ques)
-
-
-@async @spawnat 2 testid(ques)
-
-#fetch(ques[:occ])
-#take!(ques[:dolocc])
-
-
-
-
-dfd2=dfd[ (dfd[:iso].==false)&(dfd[:buyer_pos_p1].==1), convert(Array{Symbol},vcat(m.finalvars, [m.y_var, m.logvar],cfg[:random_campaigns]))]
-trps_pos_p1 ~ 1 + prd_1_qty_pre + cpn_un_pre_p4 + (1 | publisher_fct1)
-Poisson()
-LogLink()
-
-gmm1 = fit!(glmm(trps_pos_p1 ~ 1 + prd_1_qty_pre + cpn_un_pre_p4 + (1 | publisher_fct1), dfd[ (dfd[:iso].==false)&(dfd[:buyer_pos_p1].==1),:] ,   Poisson()  ))
-
-
-# ------------------------------------------------------------------------------------------------------------
-# ---------- END END END -------------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------------------------------------
 
 
